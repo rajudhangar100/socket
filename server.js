@@ -9,55 +9,50 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // you can restrict this to your frontend domain
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-// Simple matchmaking variables
-let waitingPlayer = null;
-let roomCount = 0;
+let roomCodes = {}; // Store room codes and players
 
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
-  // When a user is ready to play, they emit "joinGame" with their info
-  socket.on("joinGame", (userData) => {
-    // Save user info on the socket instance for later use
-    socket.data.user = userData; // e.g., { uid, name, email }
+  // Create a unique room code and store the socket
+  socket.on("codecreate", (code) => {
+    if (!roomCodes[code]) {
+      roomCodes[code] = { players: [] };
+    }
+    socket.emit("codeCreated", { success: true, code });
+  });
 
-    if (waitingPlayer) {
-      // Pair up with the waiting player
-      const roomName = `room-${roomCount++}`;
-      socket.join(roomName);
-      waitingPlayer.join(roomName);
+  // Compare code and join room if valid
+  socket.on("compare_code", (code) => {
+    if (roomCodes[code]) {
+      socket.join(code);
+      roomCodes[code].players.push(socket);
 
-      // Optionally decide which player goes first (here we choose the waiting player)
-      io.to(roomName).emit("gameStart", {
-        room: roomName,
-        players: [waitingPlayer.data.user, socket.data.user],
-        turn: waitingPlayer.id,
-      });
-      
-      waitingPlayer = null; // Clear waiting player since match is made
+      if (roomCodes[code].players.length === 2) {
+        // Start game once two players have joined
+        io.to(code).emit("gameStart", { room: code });
+      }
     } else {
-      // No waiting player: mark this socket as waiting
-      waitingPlayer = socket;
-      socket.emit("waiting", { message: "Waiting for an opponent..." });
+      socket.emit("invalidCode", { message: "Invalid code!" });
     }
   });
 
-  // Listen for moves; ensure you include the room so only that game gets updated
+  // Handle move event
   socket.on("move", (data) => {
-    // data should include: { room, board, nextPlayer, ... }
-    socket.to(data.room).emit("move", data);
+    io.to(data.room).emit("move", data);
+  });
+
+  // Handle game over
+  socket.on("gameOver", (data) => {
+    console.log("Game Over:", data);
   });
 
   socket.on("disconnect", () => {
-    // If the disconnecting user was waiting, clear the waiting variable
-    if (waitingPlayer && waitingPlayer.id === socket.id) {
-      waitingPlayer = null;
-    }
     console.log("User disconnected:", socket.id);
   });
 });
